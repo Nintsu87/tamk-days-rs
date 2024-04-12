@@ -3,6 +3,7 @@ use std::error::Error as StdError;
 use csv::{Error, WriterBuilder};
 use chrono::{NaiveDate, ParseError};
 use std::io::{self, Write};
+use regex::Regex;
 //use std::io::prelude::*;
 
 //use std::env;
@@ -28,8 +29,9 @@ impl Event {
     }
 
     pub fn test_date(date: &str) -> Result<NaiveDate, ParseError> {
-        NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            NaiveDate::parse_from_str(date, "%Y-%m-%d")
     }
+
     fn format_category(&self, format:StringFormat) -> String {
         match format {
             StringFormat::Print => {
@@ -97,17 +99,19 @@ pub fn read_csv(file_path: &str) -> Result<Vec<Event>, Error> {
 
         match Event::test_date(date_str) {
             Ok(parsed_date) => {
-                if let Some((first, second)) = parse_string(category_str) {
-                    events.push(Event {
-                        date: parsed_date,
-                        description: description_str.to_string(),
-                        primary_category: first,
-                        secondary_category: second,
-                    });
-                } else {
-                    println!("Invalid input category-format");
+                match parse_string(category_str, '/') {
+                    Ok((first, second)) => {
+                        events.push(Event {
+                            date: parsed_date,
+                            description: description_str.to_string(),
+                            primary_category: first,
+                            secondary_category: second,
+                        });
+                    }
+                    Err(err) => {
+                        println!("Invalid input category format: {}", err);
+                    }
                 }
-
             }
             Err(err) => {
                 eprintln!("Error parsing date: {}", err);
@@ -127,6 +131,7 @@ pub fn delete_events(filepath: &str, orig: &[Event], events_to_delete: &[Event])
 
     let remaining_events: Vec<&Event> = orig.iter().filter(|event| !events_to_delete.contains(event)).collect();
     let mut wtr = WriterBuilder::new().from_path(filepath)?;
+    wtr.write_record(&["date", "description", "category"])?;
     for event in remaining_events {
         wtr.write_record(&[
             &event.date.format("%Y-%m-%d").to_string(),
@@ -144,6 +149,7 @@ pub fn filter_by_date(
     date_str: &str,
     comparison: DateComparison,
 ) -> Result<(), ParseError> {
+
     let given_date = if date_str.is_empty() {
         chrono::Local::now().naive_local().date()
     } else {
@@ -176,23 +182,20 @@ pub fn filter_by_date(
     Ok(())
 }
 
-fn parse_string(categories: &str) -> Option<(String, String)> {
+pub fn parse_string(categories: &str, splitter: char) -> Result<(String, String), String> {
     // Split the input string by the comma delimiter
-    let mut parts = categories.split('/');
+    let mut parts = categories.split(splitter);
 
     // Attempt to extract the first part (if available and non-empty)
-    let part1 = match parts.next() {
-        Some(s) => s.trim().to_string(), // Trim and convert to String if part exists
-        None => String::new(),
-    };
+    let part1 = parts.next().unwrap_or_default().trim().to_string();
 
     // Attempt to extract the second part (if available and non-empty)
-    let part2 = match parts.next() {
-        Some(s) => s.trim().to_string(), // Trim and convert to String if part exists
-        None => String::new(),
-    };
+    let part2 = parts.next().unwrap_or_default().trim().to_string();
 
-    Some((part1, part2))
+    if parts.next().is_some() {
+        return Err("Too many parts in the input string".to_string());
+    }
+    Ok((part1, part2))
 }
 
 pub fn filter_by_string(orig: &[Event], results: &mut Vec<Event>, input: &str, excluded: bool, category: bool) {
@@ -221,6 +224,16 @@ pub fn filter_by_string(orig: &[Event], results: &mut Vec<Event>, input: &str, e
     }
 }
 
+
+
+pub fn validate_date_format(date_str: &str) -> bool {
+    // Define a regular expression pattern to match "YYYY-mm-dd" format
+    let re = Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap();
+
+    // Check if the input string matches the expected format
+    re.is_match(date_str)
+}
+
 pub fn open_file(filepath: &str) -> io::Result<File> {
     OpenOptions::new()
         .write(true)
@@ -232,4 +245,43 @@ pub fn append_to_csv(file: &mut File, new_row: String) -> io::Result<()> {
     file.write_all(new_row.as_bytes())?;
     file.write_all(b"\n")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    // Import necessary items for testing
+    use super::*;
+
+    #[test]
+    fn test_parse_string_valid_input() {
+        // Test parsing a valid input string with a comma delimiter
+        let input = "first,second";
+        let result = parse_string(input, ',');
+        assert_eq!(result, Ok(("first".to_string(), "second".to_string())));
+    }
+
+    #[test]
+    fn test_parse_string_single_part() {
+        // Test parsing a single-part input string
+        let input = "only";
+        let result = parse_string(input, ',');
+        assert_eq!(result, Ok(("only".to_string(), "".to_string())));
+    }
+
+    #[test]
+    fn test_parse_string_empty_input() {
+        // Test parsing an empty input string
+        let input = "";
+        let result = parse_string(input, ',');
+        assert_eq!(result, Ok(("".to_string(), "".to_string())));
+    }
+
+    #[test]
+    fn test_parse_string_too_many_parts() {
+        // Test parsing an input string with too many parts
+        let input = "first,second,third";
+        let result = parse_string(input, ',');
+        assert!(result.is_err()); // Expecting an error
+        assert_eq!(result.unwrap_err(), "Too many parts in the input string".to_string());
+    }
 }
