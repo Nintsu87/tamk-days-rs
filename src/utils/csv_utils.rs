@@ -1,8 +1,9 @@
-use std::fs::File;
-use chrono::{Datelike, NaiveDate, ParseError};
-//use std::io;
-//use std::io::prelude::*;
+use std::fs::{File, OpenOptions};
 use csv::Error;
+use chrono::{Datelike, NaiveDate, ParseError};
+use std::io::{self, Write};
+//use std::io::prelude::*;
+
 //use std::env;
 //use std::path::PathBuf;
 
@@ -14,10 +15,56 @@ pub struct Event {
     secondary_category: String,
 }
 
+impl Event {
+    pub fn new(date: NaiveDate, description: String, primary_category: String, secondary_category: String) -> Self {
+        Event {
+            date,
+            description,
+            primary_category,
+            secondary_category,
+        }
+    }
+
+    pub fn test_date(date: &str) -> Result<NaiveDate, ParseError> {
+        NaiveDate::parse_from_str(date, "%Y-%m-%d")
+    }
+
+    pub fn format_to_string(&self, format: StringFormat) -> String {
+        let date = self.date.format("%Y-%m-%d").to_string();
+        let description_string = if self.description.is_empty() {
+            String::new()
+        } else {
+            self.description.clone()
+        };
+        match format {
+            StringFormat::Print => {
+                let category_string = match (self.primary_category.is_empty(), self.secondary_category.is_empty()) {
+                    (true, true) => "/".to_string(),
+                    (false, true) => self.primary_category.clone(),
+                    _ => format!("{}/{}", self.primary_category, self.secondary_category),
+                };
+                format!("{}: {}, {}", date, description_string, category_string)
+            }
+            StringFormat::Csv => {
+                let category_string = match (self.primary_category.is_empty(), self.secondary_category.is_empty()) {
+                    (true, true) => String::new(),
+                    (false, true) => self.primary_category.clone(),
+                    _ => format!("{}/{}", self.primary_category, self.secondary_category),
+                };
+                format!("{},{},{}", date, description_string, category_string)
+            }
+        }
+    }
+}
 pub enum DateComparison {
     Before,
     After,
     Exact,
+}
+
+pub enum StringFormat {
+    Print,
+    Csv,
 }
 
 // Function to read and process a CSV file
@@ -35,7 +82,7 @@ pub fn read_csv(file_path: &str) -> Result<Vec<Event>, Error> {
         let description_str = record.get(1).unwrap_or_default();
         let category_str = record.get(2).unwrap_or_default();
 
-        match NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+        match Event::test_date(date_str) {
             Ok(parsed_date) => {
                 if let Some((first, second)) = parse_string(category_str) {
                     events.push(Event {
@@ -54,24 +101,41 @@ pub fn read_csv(file_path: &str) -> Result<Vec<Event>, Error> {
             }
         }
     }
-
     Ok(events)
 }
 
 pub fn print_events(events: &Vec<Event>) {
     for event in events {
-        let date = event.date.format("%Y-%m-%d").to_string();
-        let category_string = if event.secondary_category.is_empty() {
-            // If secondary category is empty, use primary category alone
-            format!("{}", event.primary_category)
-        } else {
-            // If secondary category is present, format the primary and secondary categories
-            format!("{}/{}", event.primary_category, event.secondary_category)
-        };
-        println!("{}: {}, {}", date, event.description, category_string)
+        println!("{}", event.format_to_string(StringFormat::Print));
     }
 }
+/*
 
+fn event_to_string(event: &Event, format: StringFormat) -> String {
+    let date = event.date.format("%Y-%m-%d").to_string();
+    let description_string = if event.description.is_empty() {
+        String::new()
+    } else {
+        event.description.clone()
+    };
+    let category_string = if event.secondary_category.is_empty() {
+        // If secondary category is empty, use primary category alone
+        event.primary_category.clone()
+    } else {
+        // If secondary category is present, format the primary and secondary categories
+        format!("{}/{}", event.primary_category, event.secondary_category)
+    };
+    match format {
+        StringFormat::Print => {
+            format!("{}: {}, {}", date, description_string, category_string)
+        }
+        StringFormat::Csv => {
+            format!("{},{},{}", date, description_string, category_string)
+        }
+    }
+
+}
+ */
 pub fn add_all(orig: &[Event], results: &mut Vec<Event>) {
     for event in orig {
         results.push(event.clone());
@@ -81,7 +145,6 @@ pub fn add_all(orig: &[Event], results: &mut Vec<Event>) {
 pub fn filter_today(orig: &[Event], results: &mut Vec<Event>) {
     // Get today's date
     let today = chrono::Local::now().naive_local();
-
     // Iterate over the original events
     for event in orig {
         // Check if the event's date matches today's month and day
@@ -128,9 +191,9 @@ fn parse_string(categories: &str) -> Option<(String, String)> {
     let mut parts = categories.split('/');
 
     // Attempt to extract the first part (if available and non-empty)
-    let part1 = match parts.next()?.trim() {
-        "" => return None, // Return None if the first part is empty
-        s => s.to_string(),
+    let part1 = match parts.next() {
+        Some(s) => s.trim().to_string(), // Trim and convert to String if part exists
+        None => String::new(),
     };
 
     // Attempt to extract the second part (if available and non-empty)
@@ -163,3 +226,15 @@ pub fn filter_by_category(orig: &[Event], results: &mut Vec<Event>, input: &str,
     }
 }
 
+pub fn open_file(filepath: &str) -> io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open(filepath)
+}
+
+pub fn append_to_csv(file: &mut File, new_row: String) -> io::Result<()> {
+    file.write_all(new_row.as_bytes())?;
+    file.write_all(b"\n")?;
+    Ok(())
+}
