@@ -1,5 +1,5 @@
 mod utils;
-use utils::csv_utils::{read_csv, print_events, add_all, filter_today, filter_by_date, filter_by_category, append_to_csv, open_file, DateComparison, StringFormat};
+use utils::csv_utils::{read_csv, print_events, filter_by_date, filter_by_string, append_to_csv, open_file, delete_events, DateComparison, StringFormat};
 
 use std::path::Path;
 use clap::{App, Arg, SubCommand};
@@ -66,6 +66,15 @@ fn main() {
                                 .requires("categories")
                                 .help("Exclude the category pick.")
                             )
+                            .arg(
+                                Arg::new("description")
+                                .short('x')
+                                .long("description")
+                                .takes_value(true)
+                                .value_name("DESCRIPTION")
+                                .required(false)
+                                .help("Choose events with start of description value")
+                            )
 
                     )
                     .subcommand(
@@ -99,6 +108,50 @@ fn main() {
                                 .help("Add event category/categories.\nGive category in format: \n\t<primary_category[,secondary_category]>")
                             )
                     )
+                    .subcommand(
+                        SubCommand::with_name("delete")
+                            .about("Delete event in used csv file with filters.")
+                            .arg(
+                                Arg::new("dry-run")
+                                .short('r')
+                                .long("dry-run")
+                                .takes_value(false)
+                                .required(false)
+                                .help("List filtered to be deleted events without deleting them.")
+                            )
+                            .arg(
+                                Arg::new("description")
+                                .short('x')
+                                .long("description")
+                                .takes_value(true)
+                                .required(false)
+                                .help("Filter to delete by start of the description.")
+                            )
+                            .arg(
+                                Arg::new("date")
+                                .short('d')
+                                .long("date")
+                                .takes_value(true)
+                                .required(false)
+                                .help("Filter to delete by date.")
+                            )
+                            .arg(
+                                Arg::new("category")
+                                .short('c')
+                                .long("category")
+                                .takes_value(true)
+                                .required(false)
+                                .help("Filter to delete by start of the primary or secondary category.")
+                            )
+                            .arg(
+                                Arg::new("all")
+                                .short('a')
+                                .long("all")
+                                .takes_value(false)
+                                .required(false)
+                                .help("Filter to delete every event.")
+                            )
+                    )
                     .get_matches();
 
     // create operating system free path to the events.csv and create a String for file handling
@@ -126,11 +179,23 @@ fn main() {
     let mut result_events = Vec::new();
     if let Some(list_matches) = matches.subcommand_matches("list") {
         if !list_matches.args_present() {
-            add_all(&orig_events, &mut result_events);
+            let empty_string = String::new();
+            if let Err(err) = filter_by_date(&orig_events, &mut result_events, &empty_string, DateComparison::All) {
+                eprintln!("Error parsing date: {}", err);
+                return;
+            }
         }
+
         if list_matches.is_present("today") {
-            filter_today(&orig_events, &mut result_events);
+            let empty_string = String::new();
+            if let Err(err) = filter_by_date(&orig_events, &mut result_events, &empty_string, DateComparison::Today) {
+                eprintln!("Error parsing date: {}", err);
+                return;
+            }
+        } else {
+            println!("Something unexpected happened!");
         }
+
         if list_matches.is_present("before-date"){
             if let Some(date) = list_matches.value_of("before-date") {
                 if let Err(err) = filter_by_date(&orig_events, &mut result_events, date, DateComparison::Before) {
@@ -166,7 +231,15 @@ fn main() {
         if list_matches.is_present("categories"){
             if let Some(categories) = list_matches.value_of("categories") {
                 let exclude = list_matches.is_present("exclude");
-                filter_by_category(&orig_events, &mut result_events, categories , exclude);
+                filter_by_string(&orig_events, &mut result_events, categories , exclude, false);
+            } else {
+                println!("Something unexpected happened!");
+            }
+        }
+
+        if list_matches.is_present("description"){
+            if let Some(description) = list_matches.value_of("description") {
+                filter_by_string(&orig_events, &mut result_events, description , false, true);
             } else {
                 println!("Something unexpected happened!");
             }
@@ -233,9 +306,41 @@ fn main() {
             eprintln!("Error: Can't add event without description argument.")
         }
 
+    } else if let Some(delete_matches) = matches.subcommand_matches("delete") {
+        let dry_run = delete_matches.is_present("dry-run");
+        if delete_matches.is_present("all") {
+            let empty_string = String::new();
+            if let Err(err) = filter_by_date(&orig_events, &mut result_events, &empty_string, DateComparison::All) {
+                eprintln!("Error parsing date: {}", err);
+                return;
+            }
+        } else if delete_matches.is_present("description") || delete_matches.is_present("category") || delete_matches.is_present("date") {
+            if let Some(description_str) = delete_matches.value_of("description") {
+                filter_by_string(&orig_events, &mut result_events, description_str, false, false);
+            }
+            if let Some(category_str) = delete_matches.value_of("category") {
+                filter_by_string(&orig_events, &mut result_events, category_str, false, true)
+            }
+        }
+
+        match dry_run {
+            true => {
+                println!("Following events are filtered for deleting:");
+                print_events(&result_events)
+            },
+            false => {
+                // Perform actual deletion of events
+                delete_events(&path_string, &orig_events, &result_events)
+                    .unwrap_or_else(|err| {
+                        // Handle error by printing a custom message and panic
+                        eprintln!("Error deleting events: {}", err);
+                        std::process::exit(1); // Exit the program with a non-zero status
+                    });
+            }
+        }
     } else {
         // Jos annettua alikomentoa ei ole määritelty
-        eprintln!("Error: Unknown or missing subcommand. Available subcommands: list");
+        eprintln!("Error: Unknown or missing subcommand. Available subcommands: list, add, delete");
         // Tulosta virheviesti, jos tuntematon alikomento
     }
 

@@ -1,13 +1,15 @@
 use std::fs::{File, OpenOptions};
-use csv::Error;
-use chrono::{Datelike, NaiveDate, ParseError};
+use std::error::Error as StdError;
+use csv::{Error, WriterBuilder};
+use chrono::{NaiveDate, ParseError};
 use std::io::{self, Write};
 //use std::io::prelude::*;
 
 //use std::env;
 //use std::path::PathBuf;
 
-#[derive(Debug, Clone)] // Add #[derive(Clone)] to enable cloning
+#[derive(Debug, Clone)] // enable cloning
+#[derive(PartialEq)]    // enable comparison
 pub struct Event {
     date: NaiveDate,
     description: String,
@@ -28,7 +30,24 @@ impl Event {
     pub fn test_date(date: &str) -> Result<NaiveDate, ParseError> {
         NaiveDate::parse_from_str(date, "%Y-%m-%d")
     }
-
+    fn format_category(&self, format:StringFormat) -> String {
+        match format {
+            StringFormat::Print => {
+                match (self.primary_category.is_empty(), self.secondary_category.is_empty()) {
+                    (true, true) => "/".to_string(),
+                    (false, true) => self.primary_category.clone(),
+                    _ => format!("{}/{}", self.primary_category, self.secondary_category),
+                }
+            }
+            StringFormat::Csv => {
+                match (self.primary_category.is_empty(), self.secondary_category.is_empty()) {
+                    (true, true) => String::new(),
+                    (false, true) => self.primary_category.clone(),
+                    _ => format!("{}/{}", self.primary_category, self.secondary_category),
+                }
+            }
+        }
+    }
     pub fn format_to_string(&self, format: StringFormat) -> String {
         let date = self.date.format("%Y-%m-%d").to_string();
         let description_string = if self.description.is_empty() {
@@ -36,21 +55,12 @@ impl Event {
         } else {
             self.description.clone()
         };
+        let category_string = self.format_category(format.clone());
         match format {
             StringFormat::Print => {
-                let category_string = match (self.primary_category.is_empty(), self.secondary_category.is_empty()) {
-                    (true, true) => "/".to_string(),
-                    (false, true) => self.primary_category.clone(),
-                    _ => format!("{}/{}", self.primary_category, self.secondary_category),
-                };
                 format!("{}: {}, {}", date, description_string, category_string)
             }
             StringFormat::Csv => {
-                let category_string = match (self.primary_category.is_empty(), self.secondary_category.is_empty()) {
-                    (true, true) => String::new(),
-                    (false, true) => self.primary_category.clone(),
-                    _ => format!("{}/{}", self.primary_category, self.secondary_category),
-                };
                 format!("{},{},{}", date, description_string, category_string)
             }
         }
@@ -60,8 +70,11 @@ pub enum DateComparison {
     Before,
     After,
     Exact,
+    Today,
+    All
 }
 
+#[derive(Debug, Clone)]
 pub enum StringFormat {
     Print,
     Csv,
@@ -109,50 +122,20 @@ pub fn print_events(events: &Vec<Event>) {
         println!("{}", event.format_to_string(StringFormat::Print));
     }
 }
-/*
 
-fn event_to_string(event: &Event, format: StringFormat) -> String {
-    let date = event.date.format("%Y-%m-%d").to_string();
-    let description_string = if event.description.is_empty() {
-        String::new()
-    } else {
-        event.description.clone()
-    };
-    let category_string = if event.secondary_category.is_empty() {
-        // If secondary category is empty, use primary category alone
-        event.primary_category.clone()
-    } else {
-        // If secondary category is present, format the primary and secondary categories
-        format!("{}/{}", event.primary_category, event.secondary_category)
-    };
-    match format {
-        StringFormat::Print => {
-            format!("{}: {}, {}", date, description_string, category_string)
-        }
-        StringFormat::Csv => {
-            format!("{},{},{}", date, description_string, category_string)
-        }
-    }
+pub fn delete_events(filepath: &str, orig: &[Event], events_to_delete: &[Event]) -> Result<(),Box<dyn StdError>> {
 
-}
- */
-pub fn add_all(orig: &[Event], results: &mut Vec<Event>) {
-    for event in orig {
-        results.push(event.clone());
+    let remaining_events: Vec<&Event> = orig.iter().filter(|event| !events_to_delete.contains(event)).collect();
+    let mut wtr = WriterBuilder::new().from_path(filepath)?;
+    for event in remaining_events {
+        wtr.write_record(&[
+            &event.date.format("%Y-%m-%d").to_string(),
+            &event.description,
+            &event.format_category(StringFormat::Csv),
+        ])?;
     }
-}
-
-pub fn filter_today(orig: &[Event], results: &mut Vec<Event>) {
-    // Get today's date
-    let today = chrono::Local::now().naive_local();
-    // Iterate over the original events
-    for event in orig {
-        // Check if the event's date matches today's month and day
-        if event.date.month() == today.month() && event.date.day() == today.day() {
-            // Add the event to the results vector
-            results.push(event.clone());
-        }
-    }
+    wtr.flush()?;
+    Ok(())
 }
 
 pub fn filter_by_date(
@@ -161,7 +144,11 @@ pub fn filter_by_date(
     date_str: &str,
     comparison: DateComparison,
 ) -> Result<(), ParseError> {
-    let given_date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")?;
+    let given_date = if date_str.is_empty() {
+        chrono::Local::now().naive_local().date()
+    } else {
+        NaiveDate::parse_from_str(date_str, "%Y-%m-%d")?
+    };
 
     for event in orig {
         match comparison {
@@ -175,10 +162,13 @@ pub fn filter_by_date(
                     results.push(event.clone());
                 }
             }
-            DateComparison::Exact => {
+            DateComparison::Exact | DateComparison::Today => {
                 if event.date == given_date {
                     results.push(event.clone());
                 }
+            }
+            DateComparison::All => {
+                results.push(event.clone());
             }
         }
     }
@@ -205,21 +195,26 @@ fn parse_string(categories: &str) -> Option<(String, String)> {
     Some((part1, part2))
 }
 
-pub fn filter_by_category(orig: &[Event], results: &mut Vec<Event>, input: &str, excluded: bool) {
+pub fn filter_by_string(orig: &[Event], results: &mut Vec<Event>, input: &str, excluded: bool, category: bool) {
     let lower_input = input.to_lowercase();
+
     let categories: Vec<&str> = lower_input.split(',').map(|s| s.trim()).collect();
 
     for event in orig {
-        let primary_starts_with_category = categories.iter().any(|&category| event.primary_category.starts_with(category));
-        let secondary_starts_with_category = categories.iter().any(|&category| event.secondary_category.starts_with(category));
+        let include_event: bool;
+        if category {
+            let primary_starts_with_category = categories.iter().any(|&category| event.primary_category.starts_with(category));
+            let secondary_starts_with_category = categories.iter().any(|&category| event.secondary_category.starts_with(category));
 
-        // Determine if the event should be included based on inclusive/exclusive filtering
-        let include_event = if excluded {
-            !primary_starts_with_category && !secondary_starts_with_category
+            // Determine if the event should be included based on inclusive/exclusive filtering
+            include_event = if excluded {
+                !primary_starts_with_category && !secondary_starts_with_category
+            } else {
+                primary_starts_with_category || secondary_starts_with_category
+            };
         } else {
-            primary_starts_with_category || secondary_starts_with_category
-        };
-
+            include_event = event.description.to_lowercase().starts_with(&lower_input);
+        }
         if include_event {
             results.push(event.clone());
         }
