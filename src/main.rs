@@ -14,8 +14,8 @@ const DATE_ARG: &str = "date";
 fn main() {
     let matches = App::new("NinasAlmanak")
                     .version("1.0")
-                    .author("--")
-                    .about("project")
+                    .author("Nina Laaksonen")
+                    .about("Ohsyte2024 project")
                     .subcommand(
                         SubCommand::with_name("list")
                             .about("Print all events if no filters are specified\n\tcargo run -- list")
@@ -208,9 +208,30 @@ fn main() {
                     std::process::exit(1);
                 }
             }
-
+            // filtered with both after and before date
+            if list_matches.is_present(BEFORE_DATE_ARG) && list_matches.is_present(AFTER_DATE_ARG) {
+                if let (Some(date1), Some(date2)) = (
+                    list_matches.value_of(BEFORE_DATE_ARG),
+                    list_matches.value_of(AFTER_DATE_ARG),
+                ) {
+                    if validate_date_format(date1) {
+                        if validate_date_format(date2) {
+                            let date_range = format!("{},{}", date1, date2);
+                            if let Err(err) = filter_by_date(&orig_events, &mut result_events, &date_range, DateComparison::BeforeAfter) {
+                                eprintln!("Error parsing date: {}", err);
+                                std::process::exit(1);
+                            }
+                        } else {
+                            eprintln!("Error parsing after-date. Use format YYYY-mm-dd.");
+                            std::process::exit(1);
+                        }
+                    } else {
+                        eprintln!("Error parsing before-date. Use format YYYY-mm-dd.");
+                        std::process::exit(1);
+                    }
+                }
             // add before given date matches on results
-            if let Some(date) = list_matches.value_of(BEFORE_DATE_ARG) {
+            } else if let Some(date) = list_matches.value_of(BEFORE_DATE_ARG) {
                 if validate_date_format(date) {
                     if let Err(err) = filter_by_date(&orig_events, &mut result_events, date, DateComparison::Before) {
                         eprintln!("Error parsing date: {}", err);
@@ -220,10 +241,8 @@ fn main() {
                     eprintln!("Error parsing date. Use format YYYY-mm-dd.");
                     std::process::exit(1);
                 }
-            }
-
             // add after given date matches on results
-            if let Some(date) = list_matches.value_of(AFTER_DATE_ARG) {
+            } else if let Some(date) = list_matches.value_of(AFTER_DATE_ARG) {
                 if validate_date_format(date) {
                     if let Err(err) = filter_by_date(&orig_events, &mut result_events, date, DateComparison::After) {
                         eprintln!("Error parsing date: {}", err);
@@ -249,15 +268,15 @@ fn main() {
 
             }
 
+            // add given category/categories matches to results
+            if let Some(description) = list_matches.value_of(DESCRIPTION_ARG) {
+                filter_by_string(&orig_events, &mut result_events, description , false, false);
+            }
+
             // add given category/categories matches to results, depending if excluded or not
             if let Some(categories) = list_matches.value_of(CATEGORY_ARG) {
                 let exclude = list_matches.is_present("exclude");
                 filter_by_string(&orig_events, &mut result_events, categories , exclude, true);
-            }
-
-            // add given category/categories matches to results
-            if let Some(description) = list_matches.value_of(DESCRIPTION_ARG) {
-                filter_by_string(&orig_events, &mut result_events, description , false, false);
             }
 
             // print all results
@@ -302,6 +321,10 @@ fn main() {
                 let (primary_category_str, secondary_category_str) = match add_matches.value_of(CATEGORY_ARG) {
                     // use parse_string() to get 2 strings depending on given category input
                     Some(category) => {
+                        if category.contains('/') {
+                            eprintln!("Cannot use \'/\' in the category.");
+                            std::process::exit(1);
+                        }
                         let lower_category = category.to_lowercase();
 
                         match parse_string(&lower_category, ',') {
@@ -352,7 +375,13 @@ fn main() {
                     std::process::exit(1);
                 }
             // if rest of the accepted args are present
-            } else if delete_matches.is_present(TODAY_ARG) || delete_matches.is_present(DESCRIPTION_ARG) || delete_matches.is_present(CATEGORY_ARG) || delete_matches.is_present(DATE_ARG) || delete_matches.is_present(AFTER_DATE_ARG) || delete_matches.is_present(BEFORE_DATE_ARG)|| delete_matches.is_present(DATE_ARG) {
+            } else if delete_matches.is_present(TODAY_ARG) {
+                // filter to delete with today
+                if let Err(err) = filter_by_date(&orig_events, &mut result_events, "", DateComparison::Today) {
+                    eprintln!("Error parsing date: {}", err);
+                    std::process::exit(1);
+                }
+            } else if delete_matches.is_present(DESCRIPTION_ARG) || delete_matches.is_present(CATEGORY_ARG) || delete_matches.is_present(DATE_ARG) || delete_matches.is_present(AFTER_DATE_ARG) || delete_matches.is_present(BEFORE_DATE_ARG)|| delete_matches.is_present(DATE_ARG) {
                 // filter to delete with description
                 if let Some(description_str) = delete_matches.value_of(DESCRIPTION_ARG) {
                     filter_by_string(&orig_events, &mut result_events, description_str, false, false);
@@ -360,11 +389,6 @@ fn main() {
                 // filter to delete with category
                 if let Some(category_str) = delete_matches.value_of(CATEGORY_ARG) {
                     filter_by_string(&orig_events, &mut result_events, category_str, false, true)
-                }
-                // filter to delete with today
-                if let Err(err) = filter_by_date(&orig_events, &mut result_events, "", DateComparison::Today) {
-                    eprintln!("Error parsing date: {}", err);
-                    std::process::exit(1);
                 }
                 // filter to delete with date while validating the given input
                 if let Some(date) = delete_matches.value_of(DATE_ARG) {
@@ -379,9 +403,31 @@ fn main() {
                     }
                 }
                 // filter to delete with after-date while validating the given input
-                if let Some(date) = delete_matches.value_of(AFTER_DATE_ARG) {
+                if delete_matches.is_present(BEFORE_DATE_ARG) && delete_matches.is_present(AFTER_DATE_ARG) {
+                    if let (Some(date1), Some(date2)) = (
+                        delete_matches.value_of(BEFORE_DATE_ARG),
+                        delete_matches.value_of(AFTER_DATE_ARG),
+                    ) {
+                        if validate_date_format(date1) {
+                            if validate_date_format(date2) {
+                                let date_range = format!("{},{}", date1, date2);
+                                if let Err(err) = filter_by_date(&orig_events, &mut result_events, &date_range, DateComparison::BeforeAfter) {
+                                    eprintln!("Error parsing date: {}", err);
+                                    std::process::exit(1);
+                                }
+                            } else {
+                                eprintln!("Error parsing after-date. Use format YYYY-mm-dd.");
+                                std::process::exit(1);
+                            }
+                        } else {
+                            eprintln!("Error parsing before-date. Use format YYYY-mm-dd.");
+                            std::process::exit(1);
+                        }
+                    }
+                // add before given date matches on results
+                } else if let Some(date) = delete_matches.value_of(BEFORE_DATE_ARG) {
                     if validate_date_format(date) {
-                        if let Err(err) = filter_by_date(&orig_events, &mut result_events, date, DateComparison::After) {
+                        if let Err(err) = filter_by_date(&orig_events, &mut result_events, date, DateComparison::Before) {
                             eprintln!("Error parsing date: {}", err);
                             std::process::exit(1);
                         }
@@ -389,11 +435,10 @@ fn main() {
                         eprintln!("Error parsing date. Use format YYYY-mm-dd.");
                         std::process::exit(1);
                     }
-                }
-                // filter to delete with before-date while validating the given input
-                if let Some(date) = delete_matches.value_of(BEFORE_DATE_ARG) {
+                // add after given date matches on results
+                } else if let Some(date) = delete_matches.value_of(AFTER_DATE_ARG) {
                     if validate_date_format(date) {
-                        if let Err(err) = filter_by_date(&orig_events, &mut result_events, date, DateComparison::Before) {
+                        if let Err(err) = filter_by_date(&orig_events, &mut result_events, date, DateComparison::After) {
                             eprintln!("Error parsing date: {}", err);
                             std::process::exit(1);
                         }

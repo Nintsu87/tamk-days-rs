@@ -72,9 +72,11 @@ impl Event {
 }
 
 // Used in filter_by_date()
+#[derive(PartialEq)]
 pub enum DateComparison {
     Before,
     After,
+    BeforeAfter,
     Exact,
     Today,
     All
@@ -162,6 +164,7 @@ pub fn delete_events(filepath: &str, orig: &[Event], events_to_delete: &[Event])
 
     // make sure all rows are written in the file
     wtr.flush()?;
+    wtr.into_inner()?;
     Ok(())
 }
 
@@ -174,11 +177,22 @@ pub fn filter_by_date(
     comparison: DateComparison,
 ) -> Result<(), ParseError> {
     // if no given date, use todays date instead
-    let given_date = if date_str.is_empty() {
-        chrono::Local::now().naive_local().date()
-    } else {
-        NaiveDate::parse_from_str(date_str, "%Y-%m-%d")?
-    };
+    // use todays date
+    let mut given_date = chrono::Local::now().naive_local().date();
+    let mut before_date = chrono::Local::now().naive_local().date();
+    let mut after_date = chrono::Local::now().naive_local().date();
+
+    if comparison == DateComparison::BeforeAfter {
+        let mut dates = date_str.split(',');
+        if let Some(before) = dates.next() {
+            before_date = Event::test_date(before)?;
+        }
+        if let Some(after) = dates.next() {
+            after_date = Event::test_date(after)?;
+        }
+    } else if !date_str.is_empty(){
+        given_date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")?
+    }
 
     // create temp vector for gathering filtered events and filter by given comparison
     let mut temp_results: Vec<Event> = Vec::new();
@@ -192,6 +206,17 @@ pub fn filter_by_date(
             DateComparison::After => {
                 if event.date > given_date {
                     temp_results.push(event.clone());
+                }
+            }
+            DateComparison::BeforeAfter => {
+                if after_date > before_date {
+                    if event.date < before_date || event.date > after_date {
+                        temp_results.push(event.clone());
+                    }
+                } else {
+                    if event.date < before_date && event.date > after_date {
+                        temp_results.push(event.clone());
+                    }
                 }
             }
             DateComparison::Exact | DateComparison::Today => {
@@ -259,13 +284,19 @@ pub fn filter_by_string(orig: &[Event], results: &mut Vec<Event>, input: &str, e
             };
         // must be description if not category
         } else {
-            // create boolean depending if excluded is active
-
             include_event = event.description.to_lowercase().starts_with(&lower_input)
         }
         // add event in result list if its not added already
         if include_event && !results.contains(event) {
             results.push(event.clone());
+        }
+        // go through all events in results to remove all events with category
+        if category && excluded {
+            results.retain(|event| {
+                let primary_matches = !event.primary_category.is_empty() && categories.iter().any(|&cat| event.primary_category.to_lowercase().starts_with(cat));
+                let secondary_matches = !event.secondary_category.is_empty() && categories.iter().any(|&cat| event.secondary_category.to_lowercase().starts_with(cat));
+                !(primary_matches || secondary_matches)
+            });
         }
     }
 }
